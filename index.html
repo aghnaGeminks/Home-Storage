@@ -6,6 +6,8 @@
     <title>Home Storage - Cloud File Manager (Aghna's Home)</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- JSZip CDN for extracting zip files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -351,10 +353,15 @@
                 <textarea id="editor-textarea" class="w-full flex-1 bg-slate-950/90 border border-slate-800 rounded-xl p-3 sm:p-4 font-mono text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-cyan-500 resize-none leading-relaxed min-h-[220px]"></textarea>
                 <img id="editor-img-preview" class="hidden max-h-[300px] mx-auto rounded-xl object-contain border border-slate-800" alt="Pratinjau">
                 <video id="editor-video-preview" controls class="hidden max-h-[300px] mx-auto rounded-xl border border-slate-800 w-full"></video>
+                <!-- Zip Content Info Container Inside Viewer -->
+                <div id="editor-zip-preview" class="hidden w-full flex-1 overflow-y-auto space-y-2 p-2"></div>
             </div>
 
             <div class="flex flex-col sm:flex-row items-center justify-between border-t border-slate-800 pt-3 gap-2">
                 <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <button id="btn-extract-zip" onclick="extractActiveZipFile()" class="hidden flex-1 sm:flex-none px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-file-zipper"></i> Ekstrak File ZIP
+                    </button>
                     <button id="btn-copy-text" onclick="copyEditorContent()" class="flex-1 sm:flex-none px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center justify-center gap-1.5">
                         <i class="fa-solid fa-copy"></i> Salin
                     </button>
@@ -382,7 +389,6 @@
         import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // Konfigurasi Firebase Asli
         const firebaseConfig = {
             apiKey: "AIzaSyBq5f7bfRKVyA36zXowqy-wnn813dNngS4",
             authDomain: "mystoragecloud-89643.firebaseapp.com",
@@ -595,7 +601,6 @@
             }, 300);
         }
 
-        // WORKSPACE RENDERING DENGAN ANIMASI LOADING
         async function renderWorkspace() {
             const container = document.getElementById('workspace-content');
             
@@ -840,17 +845,35 @@
             const textarea = document.getElementById('editor-textarea');
             const imgPreview = document.getElementById('editor-img-preview');
             const videoPreview = document.getElementById('editor-video-preview');
+            const zipPreview = document.getElementById('editor-zip-preview');
             const btnSave = document.getElementById('btn-save-text');
             const btnCopy = document.getElementById('btn-copy-text');
+            const btnExtract = document.getElementById('btn-extract-zip');
 
-            textarea.classList.add('hidden'); imgPreview.classList.add('hidden'); videoPreview.classList.add('hidden'); btnSave.classList.add('hidden'); btnCopy.classList.add('hidden');
+            textarea.classList.add('hidden');
+            imgPreview.classList.add('hidden');
+            videoPreview.classList.add('hidden');
+            zipPreview.classList.add('hidden');
+            btnSave.classList.add('hidden');
+            btnCopy.classList.add('hidden');
+            btnExtract.classList.add('hidden');
+
+            const ext = (file.ext || file.name.split('.').pop() || '').toLowerCase();
 
             if (file.type === 'image') {
-                imgPreview.src = file.content || ''; imgPreview.classList.remove('hidden');
+                imgPreview.src = file.content || '';
+                imgPreview.classList.remove('hidden');
             } else if (file.type === 'video') {
-                videoPreview.src = file.content || ''; videoPreview.classList.remove('hidden');
+                videoPreview.src = file.content || '';
+                videoPreview.classList.remove('hidden');
+            } else if (ext === 'zip') {
+                zipPreview.classList.remove('hidden');
+                btnExtract.classList.remove('hidden');
+                zipPreview.innerHTML = `<p class="text-xs text-slate-400 text-center py-8"><i class="fa-solid fa-file-zipper text-2xl text-amber-400 mb-2 block"></i>File arsip ZIP siap diekstrak ke folder saat ini.</p>`;
             } else {
-                textarea.classList.remove('hidden'); btnSave.classList.remove('hidden'); btnCopy.classList.remove('hidden');
+                textarea.classList.remove('hidden');
+                btnSave.classList.remove('hidden');
+                btnCopy.classList.remove('hidden');
                 if (file.content && file.content.startsWith('data:')) {
                     try {
                         const response = await fetch(file.content);
@@ -860,6 +883,68 @@
                 } else { textarea.value = file.content || ''; }
             }
             document.getElementById('modal-file-editor').classList.remove('hidden');
+        }
+
+        // --- FITUR EKSTRAK FILE ZIP ---
+        async function extractActiveZipFile() {
+            if (!activeEditingFileId) return;
+            const file = await dbGet(activeEditingFileId);
+            if (!file || !file.content) return;
+
+            showToast('Mengekstrak file ZIP...', 'info');
+
+            try {
+                // Ubah data base64 menjadi Uint8Array untuk JSZip
+                const base64Data = file.content.split(',')[1];
+                const binaryString = atob(base64Data);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                const zip = new JSZip();
+                const zipContent = await zip.loadAsync(bytes);
+                let extractedCount = 0;
+
+                for (const relativePath of Object.keys(zipContent.files)) {
+                    const zipEntry = zipContent.files[relativePath];
+                    if (zipEntry.dir) continue; // Lewati direktori kosong
+
+                    const fileName = relativePath.split('/').pop();
+                    if (!fileName) continue;
+
+                    const ext = fileName.split('.').pop().toLowerCase();
+                    let fileType = 'document';
+                    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext)) fileType = 'image';
+                    else if (['mp4', 'webm', 'mkv', 'mov'].includes(ext)) fileType = 'video';
+
+                    // Ambil isi file sebagai blob lalu ubah ke base64
+                    const contentBlob = await zipEntry.async('blob');
+                    const contentBase64 = await convertBlobToBase64(contentBlob);
+
+                    const extractedFileItem = {
+                        id: 'file-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
+                        name: fileName,
+                        type: fileType,
+                        parentId: currentFolderId,
+                        ext: ext,
+                        content: contentBase64,
+                        size: contentBlob.size,
+                        createdAt: new Date().toISOString()
+                    };
+
+                    await dbPut(extractedFileItem);
+                    extractedCount++;
+                }
+
+                closeModal('modal-file-editor');
+                await renderWorkspace();
+                showToast(`Berhasil mengekstrak ${extractedCount} file!`, 'success');
+            } catch (e) {
+                console.error("Gagal mengekstrak ZIP:", e);
+                showToast('Gagal mengekstrak file ZIP', 'error');
+            }
         }
 
         async function saveFileEditorChanges() {
@@ -917,11 +1002,12 @@
                 let type = 'document';
                 if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext.toLowerCase())) type = 'image';
                 else if (['mp4', 'webm', 'mkv', 'mov'].includes(ext.toLowerCase())) type = 'video';
+                else if (ext.toLowerCase() === 'zip') type = 'document';
 
                 const base64Content = await convertBlobToBase64(file);
                 const newFile = {
                     id: 'file-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
-                    name: file.name, type: type, parentId: currentFolderId, ext: ext,
+                    name: file.name, type: type, parentId: currentFolderId, ext: ext.toLowerCase(),
                     content: base64Content, size: file.size, createdAt: new Date().toISOString()
                 };
                 await dbPut(newFile);
@@ -934,6 +1020,7 @@
             ext = (ext || '').toLowerCase();
             if (type === 'image') return { icon: 'fa-solid fa-image', color: 'text-emerald-400', bg: 'bg-emerald-500/10' };
             if (type === 'video') return { icon: 'fa-solid fa-video', color: 'text-purple-400', bg: 'bg-purple-500/10' };
+            if (ext === 'zip') return { icon: 'fa-solid fa-file-zipper', color: 'text-amber-400', bg: 'bg-amber-500/10' };
             switch (ext) {
                 case 'py': return { icon: 'fa-brands fa-python', color: 'text-amber-400', bg: 'bg-amber-500/10' };
                 case 'js': return { icon: 'fa-brands fa-js', color: 'text-yellow-400', bg: 'bg-yellow-500/10' };
